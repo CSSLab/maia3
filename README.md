@@ -1,16 +1,29 @@
-# Maia-3
+# Maia-3: human-like chess play and analysis engine
 
-[![Paper](https://img.shields.io/badge/arXiv-2605.19091-b31b1b?logo=arxiv&logoWidth=10&link=https://arxiv.org/abs/2605.19091)](https://arxiv.org/abs/2605.19091)
+## [models](https://huggingface.co/collections/MaiaChess/maia3)/[code](https://github.com/CSSLab/maia-chess)/[paper](https://arxiv.org/abs/2605.19091)/[website](https://maiachess.com)
+
 [![Hugging Face](https://img.shields.io/badge/HuggingFace-Models-yellow?link=https://huggingface.co/collections/MaiaChess/maia3)](https://huggingface.co/collections/MaiaChess/maia3)
+[![Paper](https://img.shields.io/badge/arXiv-2605.19091-b31b1b?logo=arxiv&logoWidth=10&link=https://arxiv.org/abs/2605.19091)](https://arxiv.org/abs/2605.19091)
 
-Maia3 is a family of chess transformer models for matching human moves across
+
+Maia-3 is a family of chess transformer models for predicting human moves across
 skill levels. This repository contains the inference code needed to run the
-released Maia3 weights as a UCI chess engine.
+released Maia-3 weights as a UCI chess engine.
 
 <img src="assets/scale_acc_1d.png" alt="Maia3 against the prior state of the art" width="200">
 
-Maia3 is built on [Chessformer](https://arxiv.org/abs/2605.19091), a transformer
-architecture for chess with Geometric Attention Bias (GAB).
+Maia3 is built on Chessformer, our novel transformer architecture for chess modeling. Read the paper here: [Chessformer: A Unified Architecture for Chess Modeling](https://arxiv.org/abs/2605.19091)
+
+If you use Maia-3 in your work, please cite our paper:
+```bibtex
+@inproceedings{monroe2026chessformer,
+title={Chessformer: A Unified Architecture for Chess Modeling},
+author={Daniel Monroe and George Eilender and Philip Chalmers and Zhenwei Tang and Ashton Anderson},
+booktitle={The Fourteenth International Conference on Learning Representations},
+year={2026},
+url={https://openreview.net/forum?id=2ltBRzEHyd}
+}
+```
 
 ## Install
 
@@ -61,7 +74,6 @@ The built-in aliases apply the correct architecture settings automatically.
 
 | Alias | Hugging Face repo | Architecture |
 | --- | --- | --- |
-| `maia3-3m-ablation` | `UofTCSSLab/Maia3-ablate-3M` | 8 history, 192 dim, 6 heads |
 | `maia3-5m` | `UofTCSSLab/Maia3-5M` | 8 history, 256 dim, 8 heads |
 | `maia3-23m` | `UofTCSSLab/Maia3-23M` | 8 history, 512 dim, 16 heads |
 | `maia3-79m` | `UofTCSSLab/Maia3-79M` | 8 history, 1024 dim, 32 heads |
@@ -69,7 +81,6 @@ The built-in aliases apply the correct architecture settings automatically.
 Short aliases also work:
 
 ```bash
-maia3-uci --model 3m
 maia3-uci --model 5m
 maia3-uci --model 23m
 maia3-uci --model 79m
@@ -166,16 +177,3 @@ python code/uci.py --model maia3-5m
 
 New integrations should prefer `maia3-uci` or `python -m maia3.uci`.
 
-## Paper and Citation
-
-Read the paper here: [Chessformer: A Unified Architecture for Chess Modeling](https://arxiv.org/abs/2605.19091)
-
-```bibtex
-@inproceedings{monroe2026chessformer,
-title={Chessformer: A Unified Architecture for Chess Modeling},
-author={Daniel Monroe and George Eilender and Philip Chalmers and Zhenwei Tang and Ashton Anderson},
-booktitle={The Fourteenth International Conference on Learning Representations},
-year={2026},
-url={https://openreview.net/forum?id=2ltBRzEHyd}
-}
-```
