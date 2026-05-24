@@ -1,0 +1,169 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyTorch models and checkpoints
+*.pt
+*.pth
+*.ckpt
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# pyenv
+.python-version
+
+# pipenv
+Pipfile.lock
+
+# PEP 582
+__pypackages__/
+
+# Celery
+celerybeat-schedule
+celerybeat.pid
+
+# SageMath parsed files
+*.sage.py
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Data directories and files
+data/
+*.pgn
+*.pgn.zst
+*_chunks.pkl
+*_cache.pkl
+val_samples_*.pkl
+
+# Training artifacts and logs
+logs/
+*.tfevents.*
+events.out.tfevents.*
+**/events.out.tfevents.*
+
+# Temporary files
+*.tmp
+*.temp
+*.log
+*.out
+
+# Model saves and training outputs
+saves/
+logs/
+wandb/
+
+# Compressed data
+*.zst
+*.gz
+*.zip
+*.tar
+*.tar.gz
+
+# Large data files
+*.csv
+*.jsonl
+*.db
+*.sqlite
+
+# Cache files
+.cache/
+*.cache
+cache/
+
+# Generated images and plots
+*.png
+*.jpg
+*.jpeg
+*.pdf
+*.svg
+!*.png  # Allow specific images if needed
+!docs/*.png  # Allow documentation images
+
+CLAUDE.md
+
+# Hydra experiment tracking
+.hydra/
+outputs/
+multirun/
+
+# MLflow tracking
+mlruns/
+
+# Weights & Biases
+wandb/
+
+# Additional ML artifacts
+*.npy
+*.npz
+*.h5
+*.hdf5
+runs/
+
+# Profiling and debugging
+*.prof
+*.trace
+profile_*/
+
+# SLURM job outputs
+slurm-*.out
+*.sbatch.out
+
+# Track the data/ scripts, the Allie-style eval dataset, and README assets that ship with the repo
+!data/
+data/*
+!data/download.sh
+!data/decompress.sh
+!data/evals/
+data/evals/*
+!data/evals/2022-test-annotated.jsonl
+!assets/scale_acc_1d.png

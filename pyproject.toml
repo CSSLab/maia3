@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "maia3"
+version = "0.1.0"
+description = "Inference tools for Maia3 chess models"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [
+  { name = "UofT CSSLab" }
+]
+dependencies = [
+  "huggingface-hub>=0.23",
+  "numpy",
+  "python-chess",
+  "torch",
+]
+
+[project.urls]
+Homepage = "https://github.com/CSSLab/maia3"
+Models = "https://huggingface.co/collections/MaiaChess/maia3"
+Paper = "https://arxiv.org/abs/2605.19091"
+
+[project.scripts]
+maia3-uci = "maia3.uci:main"
+
+[tool.setuptools.packages.find]
+include = ["maia3*"]

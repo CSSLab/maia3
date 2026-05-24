@@ -1,0 +1,4 @@
+huggingface-hub
+numpy
+python-chess
+torch
