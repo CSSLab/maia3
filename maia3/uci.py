@@ -3,7 +3,7 @@
 Reads UCI commands from stdin and writes responses to stdout. The model receives the
 current position together with up to `--history` previous positions; when launched
 with `--use_uci_history`, history is reconstructed from the moves passed in
-`position startpos moves ...`. Otherwise (or when the position arrives via `fen`),
+standard `position ... moves ...` commands. Otherwise,
 the input is padded with the current position.
 
 The easiest path is `maia3-uci --model maia3-79m`, which applies the matching
@@ -71,6 +71,9 @@ def parse_args(argv=None):
     parser.add_argument("--elo", type=int, default=1500, help="Default Elo for both self and opponent (override via UCI 'setoption name SelfElo/OppoElo')")
     parser.add_argument("--temperature", type=float, default=1.0, help="Sampling temperature on the move policy. 0 = argmax")
     parser.add_argument("--top-p", "--top_p", dest="top_p", type=float, default=1.0, help="Nucleus sampling threshold (1.0 = disabled)")
+    parser.add_argument("--multipv", "--multi-pv", dest="multipv",
+                        type=int, default=5,
+                        help="Number of candidate moves to emit as standard UCI MultiPV info lines")
     parser.add_argument("--use-uci-history", "--use_uci_history", dest="use_uci_history", action="store_true", default=False,
                         help="Rebuild board history from UCI 'position ... moves' commands. When off, the current position is repeated to fill history")
 
@@ -118,19 +121,11 @@ def parse_args(argv=None):
         raise SystemExit(0)
 
     try:
+        args.model_spec = None
         if args.model is not None:
             spec = resolve_model_spec(args.model)
             apply_model_config(args, spec)
-            if args.checkpoint_path is None:
-                args.checkpoint_path = resolve_checkpoint_path(
-                    spec,
-                    checkpoint_filename=args.checkpoint_filename,
-                    cache_dir=args.cache_dir,
-                    revision=args.revision,
-                    local_files_only=args.local_files_only,
-                    force_download=args.force_download,
-                    token=args.hf_token,
-                )
+            args.model_spec = spec
         elif args.checkpoint_path is None:
             parser.error("one of --model or --checkpoint-path is required")
     except ModelResolutionError as exc:
@@ -155,9 +150,11 @@ def load_model(cfg):
 
     missing, unexpected = model.load_state_dict(renamed, strict=False)
     if missing:
-        print(f"info string warning missing keys: {missing[:5]}{'...' if len(missing) > 5 else ''}", flush=True)
+        print(f"warning: missing keys: {missing[:5]}{'...' if len(missing) > 5 else ''}",
+              file=sys.stderr, flush=True)
     if unexpected:
-        print(f"info string warning unexpected keys: {unexpected[:5]}{'...' if len(unexpected) > 5 else ''}", flush=True)
+        print(f"warning: unexpected keys: {unexpected[:5]}{'...' if len(unexpected) > 5 else ''}",
+              file=sys.stderr, flush=True)
 
     model.eval()
     return model
@@ -186,12 +183,43 @@ def sample_from_logits(logits, temperature, top_p):
     return int(torch.multinomial(probs, num_samples=1).item())
 
 
+def _probabilities_to_permille(probs):
+    scaled = [max(0.0, float(prob)) * 1000 for prob in probs]
+    ints = [int(value) for value in scaled]
+    remainder = 1000 - sum(ints)
+    order = sorted(range(len(scaled)), key=lambda idx: scaled[idx] - ints[idx], reverse=True)
+    for idx in order[:max(0, remainder)]:
+        ints[idx] += 1
+    return tuple(ints)
+
+
+def wdl_from_value_logits(logits):
+    # Value labels are [loss, draw, win] for the side to move. UCI WDL is
+    # reported as [win, draw, loss], in permille.
+    loss, draw, win = torch.softmax(logits.float(), dim=-1).tolist()
+    return _probabilities_to_permille((win, draw, loss))
+
+
+def invert_wdl(wdl):
+    win, draw, loss = wdl
+    return loss, draw, win
+
+
+def cp_from_wdl(wdl):
+    win, _draw, loss = wdl
+    return win - loss
+
+
+def clamp_multipv(value):
+    return min(20, max(1, int(value)))
+
+
 class Maia3UCIEngine:
 
     def __init__(self, cfg):
 
         self.cfg = cfg
-        self.model = load_model(cfg)
+        self.model = None
         self.all_moves = get_all_possible_moves()
         self.all_moves_dict = {m: i for i, m in enumerate(self.all_moves)}
         self.idx_to_move = {i: m for m, i in self.all_moves_dict.items()}
@@ -200,46 +228,60 @@ class Maia3UCIEngine:
         self.oppo_elo = cfg.elo
         self.temperature = cfg.temperature
         self.top_p = cfg.top_p
+        self.multipv = clamp_multipv(cfg.multipv)
 
         self.board = chess.Board()
         self.history = deque(maxlen=cfg.history)
+        self.pending_bestmove = None
+        self.pending_search = False
         self._reset_history()
+
+    def ensure_model_loaded(self):
+        if self.model is not None:
+            return
+
+        if self.cfg.checkpoint_path is None:
+            spec = getattr(self.cfg, "model_spec", None)
+            if spec is None:
+                raise RuntimeError("No model or checkpoint was configured.")
+            print(f"resolving Maia3 checkpoint for {spec.display_name}", file=sys.stderr, flush=True)
+            self.cfg.checkpoint_path = resolve_checkpoint_path(
+                spec,
+                checkpoint_filename=self.cfg.checkpoint_filename,
+                cache_dir=self.cfg.cache_dir,
+                revision=self.cfg.revision,
+                local_files_only=self.cfg.local_files_only,
+                force_download=self.cfg.force_download,
+                token=self.cfg.hf_token,
+            )
+
+        print(f"loading Maia3 checkpoint {self.cfg.checkpoint_path}", file=sys.stderr, flush=True)
+        self.model = load_model(self.cfg)
+        print("Maia3 ready", file=sys.stderr, flush=True)
 
     def _reset_history(self):
         self.history.clear()
-        # Always seed with the current (post-mirror) tokenization so a bare FEN or
-        # ucinewgame still has something to pad with.
+        # Always seed with the current tokenization so a FEN or ucinewgame still
+        # has something to pad with.
         self.history.append(tokenize_board(self.board))
 
+    def _history_after_move(self, move):
+        board = self.board.copy(stack=False)
+        board.push(move)
+        if self.cfg.use_uci_history:
+            history = deque(self.history, maxlen=self.cfg.history)
+            history.append(tokenize_board(board))
+        else:
+            history = deque([tokenize_board(board)], maxlen=self.cfg.history)
+        return history
+
+    def _tokens_from_history(self, history):
+        return get_historical_tokens(history, self.cfg,
+                                     base=0.0, inc=0.0, clk_left_before=0.0, clk_ponder=0.0)
+
     @torch.no_grad()
-    def pick_move(self):
-
-        if self.board.is_game_over():
-            return None
-
-        legal_mask = get_legal_moves_mask(self.board, self.all_moves_dict)
-        if not bool(legal_mask.any()):
-            return None
-
-        # In --use_uci_history mode, self.history already contains real prior positions
-        # (it's appended to on every position-update). Otherwise we keep it as a single
-        # current-position entry which get_historical_tokens will replicate to fill `history`.
-        tokens = get_historical_tokens(self.history, self.cfg,
-                                       base=0.0, inc=0.0, clk_left_before=0.0, clk_ponder=0.0)
-        tokens = tokens.unsqueeze(0).to(self.cfg.device)
-        self_elos = torch.tensor([self.self_elo], dtype=torch.long, device=self.cfg.device)
-        oppo_elos = torch.tensor([self.oppo_elo], dtype=torch.long, device=self.cfg.device)
-
-        with autocast('cuda', enabled=self.cfg.use_amp and self.cfg.device.startswith('cuda')):
-            logits_move, _, _ = self.model(tokens, self_elos, oppo_elos)
-
-        logits = logits_move[0].float()
-        mask = legal_mask.to(self.cfg.device)
-        logits = logits.masked_fill(~mask, float('-inf'))
-
-        idx = sample_from_logits(logits, self.temperature, self.top_p)
-        move_uci = self.idx_to_move[idx]
-
+    def _move_from_index(self, idx):
+        move_uci = self.idx_to_move[int(idx)]
         # Predictions are in the side-to-move's perspective (board mirrored when black).
         if self.board.turn == chess.BLACK:
             move_uci = mirror_move(move_uci)
@@ -252,6 +294,67 @@ class Maia3UCIEngine:
             return None
         return move
 
+    @torch.no_grad()
+    def score_moves(self):
+
+        if self.board.is_game_over():
+            return None, []
+
+        legal_mask = get_legal_moves_mask(self.board, self.all_moves_dict)
+        if not bool(legal_mask.any()):
+            return None, []
+
+        # In --use_uci_history mode, self.history already contains real prior positions
+        # (it's appended to on every position-update). Otherwise we keep it as a single
+        # current-position entry which get_historical_tokens will replicate to fill `history`.
+        tokens = self._tokens_from_history(self.history)
+        tokens = tokens.unsqueeze(0).to(self.cfg.device)
+        self_elos = torch.tensor([self.self_elo], dtype=torch.long, device=self.cfg.device)
+        oppo_elos = torch.tensor([self.oppo_elo], dtype=torch.long, device=self.cfg.device)
+
+        with autocast('cuda', enabled=self.cfg.use_amp and self.cfg.device.startswith('cuda')):
+            logits_move, _logits_value, _ = self.model(tokens, self_elos, oppo_elos)
+
+        logits = logits_move[0].float()
+        mask = legal_mask.to(self.cfg.device)
+        logits = logits.masked_fill(~mask, float('-inf'))
+
+        idx = sample_from_logits(logits, self.temperature, self.top_p)
+        move = self._move_from_index(idx)
+
+        probs = torch.softmax(logits, dim=-1)
+        top_count = min(self.multipv, int(legal_mask.sum().item()))
+        top_probs, top_idxs = torch.topk(probs, k=top_count)
+
+        top_moves = []
+        for prob, top_idx in zip(top_probs.tolist(), top_idxs.tolist()):
+            top_move = self._move_from_index(top_idx)
+            if top_move is not None:
+                top_moves.append({"move": top_move, "policy": prob, "wdl": (0, 1000, 0)})
+
+        if top_moves:
+            candidate_tokens = torch.stack([
+                self._tokens_from_history(self._history_after_move(item["move"]))
+                for item in top_moves
+            ]).to(self.cfg.device)
+            # Candidate boards are after our move, so the side to move is the
+            # current opponent. The model's WDL is from that side's perspective;
+            # invert it back to the side choosing the candidate.
+            candidate_self_elos = torch.full((len(top_moves),), self.oppo_elo,
+                                             dtype=torch.long, device=self.cfg.device)
+            candidate_oppo_elos = torch.full((len(top_moves),), self.self_elo,
+                                             dtype=torch.long, device=self.cfg.device)
+            with autocast('cuda', enabled=self.cfg.use_amp and self.cfg.device.startswith('cuda')):
+                _, candidate_value_logits, _ = self.model(
+                    candidate_tokens,
+                    candidate_self_elos,
+                    candidate_oppo_elos,
+                )
+            for item, value_logits in zip(top_moves, candidate_value_logits):
+                item["wdl"] = invert_wdl(wdl_from_value_logits(value_logits))
+
+        return move, top_moves
+
     # -- UCI protocol -----------------------------------------------------
 
     def cmd_uci(self):
@@ -263,6 +366,7 @@ class Maia3UCIEngine:
         print(f"option name OppoElo type spin default {self.cfg.elo} min 0 max 5000")
         print(f"option name Temperature type string default {self.cfg.temperature}")
         print(f"option name TopP type string default {self.cfg.top_p}")
+        print(f"option name MultiPV type spin default {self.multipv} min 1 max 20")
         print("uciok", flush=True)
 
     def cmd_setoption(self, line):
@@ -275,20 +379,27 @@ class Maia3UCIEngine:
         except (IndexError, ValueError):
             return
 
-        if name == "elo":
-            self.self_elo = int(value)
-            self.oppo_elo = int(value)
-        elif name == "selfelo":
-            self.self_elo = int(value)
-        elif name == "oppoelo":
-            self.oppo_elo = int(value)
-        elif name == "temperature":
-            self.temperature = float(value)
-        elif name == "topp":
-            self.top_p = float(value)
+        try:
+            if name == "elo":
+                self.self_elo = int(value)
+                self.oppo_elo = int(value)
+            elif name == "selfelo":
+                self.self_elo = int(value)
+            elif name == "oppoelo":
+                self.oppo_elo = int(value)
+            elif name == "temperature":
+                self.temperature = float(value)
+            elif name == "topp":
+                self.top_p = float(value)
+            elif name == "multipv":
+                self.multipv = clamp_multipv(value)
+        except ValueError:
+            return
 
     def cmd_ucinewgame(self):
         self.board = chess.Board()
+        self.pending_bestmove = None
+        self.pending_search = False
         self._reset_history()
 
     def cmd_position(self, line):
@@ -298,13 +409,19 @@ class Maia3UCIEngine:
             return
 
         i = 1
+        position_kind = tokens[i]
         if tokens[i] == "startpos":
-            self.board = chess.Board()
+            board = chess.Board()
             i += 1
         elif tokens[i] == "fen":
             # FEN is 6 fields
+            if len(tokens) < i + 7:
+                return
             fen = " ".join(tokens[i + 1:i + 7])
-            self.board = chess.Board(fen)
+            try:
+                board = chess.Board(fen)
+            except ValueError:
+                return
             i += 7
         else:
             return
@@ -313,25 +430,64 @@ class Maia3UCIEngine:
         if i < len(tokens) and tokens[i] == "moves":
             moves = tokens[i + 1:]
 
-        if self.cfg.use_uci_history and (tokens[1] == "startpos" or not moves):
-            # Reconstruct history by replaying from a known starting board.
-            # If the position came via FEN with no moves, we only have one snapshot.
-            self.history.clear()
-            replay_board = chess.Board() if tokens[1] == "startpos" else chess.Board(self.board.fen())
-            self.history.append(tokenize_board(replay_board))
+        self.pending_bestmove = None
+        self.pending_search = False
+
+        if self.cfg.use_uci_history:
+            new_history = deque(maxlen=self.cfg.history)
+            replay_board = board.copy()
+            new_history.append(tokenize_board(replay_board))
             for mv in moves:
-                replay_board.push(chess.Move.from_uci(mv))
-                self.history.append(tokenize_board(replay_board))
-            # Apply any remaining moves to self.board
+                try:
+                    move = chess.Move.from_uci(mv)
+                    if move not in replay_board.legal_moves:
+                        return
+                    replay_board.push(move)
+                except ValueError:
+                    return
+                new_history.append(tokenize_board(replay_board))
             self.board = replay_board
+            self.history = new_history
         else:
             # Apply moves to update board, then seed history with the final position only.
             for mv in moves:
-                self.board.push(chess.Move.from_uci(mv))
+                try:
+                    move = chess.Move.from_uci(mv)
+                    if move not in board.legal_moves:
+                        return
+                    board.push(move)
+                except ValueError:
+                    return
+            self.board = board
             self._reset_history()
 
     def cmd_go(self, line):
-        move = self.pick_move()
+        self.ensure_model_loaded()
+        move, top_moves = self.score_moves()
+        for rank, item in enumerate(top_moves, start=1):
+            win, draw, loss = item["wdl"]
+            cp = cp_from_wdl(item["wdl"])
+            print(
+                f"info depth 1 multipv {rank} score cp {cp} wdl {win} {draw} {loss} "
+                f"pv {item['move'].uci()}",
+                flush=True,
+            )
+
+        if "infinite" in line.split():
+            self.pending_bestmove = move
+            self.pending_search = True
+            return
+
+        self.print_bestmove(move)
+
+    def cmd_stop(self):
+        if not self.pending_search:
+            return
+        self.print_bestmove(self.pending_bestmove)
+        self.pending_bestmove = None
+        self.pending_search = False
+
+    def print_bestmove(self, move):
         if move is None:
             print("bestmove 0000", flush=True)
         else:
@@ -347,23 +503,24 @@ class Maia3UCIEngine:
             if line == "uci":
                 self.cmd_uci()
             elif line == "isready":
+                self.ensure_model_loaded()
                 print("readyok", flush=True)
             elif line == "ucinewgame":
                 self.cmd_ucinewgame()
-            elif line.startswith("position"):
+            elif line.split()[0] == "position":
                 self.cmd_position(line)
-            elif line.startswith("go"):
+            elif line.split()[0] == "go":
                 self.cmd_go(line)
-            elif line.startswith("setoption"):
+            elif line.split()[0] == "setoption":
                 self.cmd_setoption(line)
             elif line == "quit":
                 return
             elif line == "stop":
-                continue  # we're synchronous; nothing to interrupt
+                self.cmd_stop()
 
 
-def main():
-    cfg = parse_args()
+def main(argv=None):
+    cfg = parse_args(argv)
     seed_everything(cfg.seed)
     engine = Maia3UCIEngine(cfg)
     engine.run()
