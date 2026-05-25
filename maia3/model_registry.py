@@ -168,6 +168,19 @@ def resolve_model_spec(model: str) -> ModelSpec:
     if not value:
         raise ModelResolutionError("Model name cannot be empty.")
 
+    aliases = _alias_map()
+    alias = aliases.get(_normalize_key(value))
+    if alias is not None:
+        return alias
+
+    # Some GUI engine pickers pass the selected executable path back as a model
+    # argument. Treat paths like /opt/.../maia3-23m as their launcher alias, while
+    # still rejecting actual checkpoint paths such as maia3-23m.pt below.
+    path_name = Path(value).name
+    path_alias = aliases.get(_normalize_key(path_name.removesuffix(".exe")))
+    if path_alias is not None:
+        return path_alias
+
     if Path(value).expanduser().exists() or _looks_like_local_checkpoint_path(value):
         raise ModelResolutionError(
             "Local checkpoint files should be passed with `--checkpoint-path`. "
@@ -175,11 +188,6 @@ def resolve_model_spec(model: str) -> ModelSpec:
             "architecture preset, or pass `--checkpoint-path <file>` with the "
             "matching architecture flags for a custom checkpoint."
         )
-
-    aliases = _alias_map()
-    alias = aliases.get(_normalize_key(value))
-    if alias is not None:
-        return alias
 
     parsed_url = parse_huggingface_url(value)
     if parsed_url is not None:

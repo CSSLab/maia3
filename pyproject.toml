@@ -26,6 +26,11 @@ Paper = "https://arxiv.org/abs/2605.19091"
 
 [project.scripts]
 maia3-uci = "maia3.uci:main"
+maia3-cache = "maia3.cache:main"
+maia3-3m-ablation = "maia3.presets:main_3m_ablation"
+maia3-5m = "maia3.presets:main_5m"
+maia3-23m = "maia3.presets:main_23m"
+maia3-79m = "maia3.presets:main_79m"
 
 [tool.setuptools.packages.find]
 include = ["maia3*"]

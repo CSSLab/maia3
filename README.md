@@ -47,14 +47,20 @@ python -m maia3.uci --help
 
 ## Quick Start
 
-Run the 79M Maia3 model as a UCI engine:
+Run the 5M Maia3 model as a UCI engine:
 
 ```bash
-maia3-uci --model maia3-79m
+maia3-5m
 ```
 
 The first run downloads the checkpoint from Hugging Face and caches it locally.
 After that, the same command reuses the cached file.
+
+You can pre-download the default 5M model before opening a chess GUI:
+
+```bash
+maia3-cache
+```
 
 You can also pass the Hugging Face model URL directly:
 
@@ -70,23 +76,32 @@ maia3-uci --list-models
 
 ## Models
 
-The built-in aliases apply the correct architecture settings automatically.
+The built-in aliases and preset commands apply the correct architecture settings
+automatically.
 
-| Alias | Hugging Face repo | Architecture |
-| --- | --- | --- |
-| `maia3-5m` | `UofTCSSLab/Maia3-5M` | 8 history, 256 dim, 8 heads |
-| `maia3-23m` | `UofTCSSLab/Maia3-23M` | 8 history, 512 dim, 16 heads |
-| `maia3-79m` | `UofTCSSLab/Maia3-79M` | 8 history, 1024 dim, 32 heads |
+| Model | Best for | Hugging Face repo | Command |
+| --- | --- | --- | --- |
+| 5M | First try, CPU, chess GUIs | `UofTCSSLab/Maia3-5M` | `maia3-5m` |
+| 23M | Better accuracy | `UofTCSSLab/Maia3-23M` | `maia3-23m` |
+| 79M | Best accuracy | `UofTCSSLab/Maia3-79M` | `maia3-79m` |
+| 3M ablation | Paper ablation | `UofTCSSLab/Maia3-ablate-3M` | `maia3-3m-ablation` |
 
 Short aliases also work:
 
 ```bash
+maia3-uci --model 3m
 maia3-uci --model 5m
 maia3-uci --model 23m
 maia3-uci --model 79m
 ```
 
 `maia3-3m` is kept as a compatibility alias for `maia3-3m-ablation`.
+
+Cache a larger model before opening a GUI:
+
+```bash
+maia3-cache --model maia3-79m
+```
 
 If a Hugging Face repository contains more than one checkpoint file, choose one:
 
@@ -118,6 +133,9 @@ maia3-uci --checkpoint-path /path/to/custom.pt \
 The engine reads UCI commands from stdin and writes responses to stdout. Any
 UCI-aware chess GUI or wrapper can drive it.
 
+For manual testing, use the standard UCI position forms:
+`position startpos moves e2e4` or `position fen <six-field FEN>`.
+
 User-facing options:
 
 - `Elo`: set both player and opponent Elo.
@@ -125,6 +143,56 @@ User-facing options:
 - `OppoElo`: set the opponent Elo.
 - `Temperature`: move sampling temperature. `0` means argmax.
 - `TopP`: nucleus sampling threshold. `1.0` disables top-p filtering.
+- `MultiPV`: number of likely human moves to show as UCI info lines.
+
+## Use With Nibbler or Another Chess GUI
+
+Maia3 can be added to any GUI that supports UCI engines, including Nibbler.
+
+Recommended first setup:
+
+```bash
+python -m pip install .
+maia3-cache --model maia3-5m
+```
+
+Then add a new UCI engine in your GUI:
+
+| Setting | Value |
+| --- | --- |
+| Engine executable | `maia3-5m` |
+| Arguments | none |
+
+If you use one of the preset executables (`maia3-5m`, `maia3-23m`, or
+`maia3-79m`), leave the arguments field empty. Do not add `--model` or point
+Nibbler at a `.pt` checkpoint file.
+
+If you see an error about local checkpoint files needing `--checkpoint-path`,
+the GUI is passing an executable or checkpoint path as an argument. Clear the
+arguments field and keep only the preset executable selected.
+
+If your GUI asks for a full path to the executable, find it with:
+
+```bash
+which maia3-5m
+```
+
+On Windows:
+
+```powershell
+where maia3-5m
+```
+
+You can use the larger models the same way by selecting `maia3-23m` or
+`maia3-79m` as the engine executable. Pre-caching is recommended because some
+GUIs time out if an engine downloads a checkpoint during startup.
+
+Maia3 starts the UCI handshake before loading the model, then loads the
+checkpoint on `isready` or `go`. During analysis it emits standard `MultiPV`
+`info` lines with WDL values from Maia3's value head, then returns `bestmove`.
+Those WDL values are human-game outcome predictions for the candidate line, not
+Stockfish-style search evaluations. The centipawn field is a GUI compatibility
+score derived from the WDL head, not a searched engine evaluation.
 
 Launch with reconstructed move history:
 
@@ -176,4 +244,3 @@ python code/uci.py --model maia3-5m
 ```
 
 New integrations should prefer `maia3-uci` or `python -m maia3.uci`.
-
