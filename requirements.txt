@@ -1,4 +1,4 @@
 huggingface-hub
 numpy
-python-chess
+chess
 torch

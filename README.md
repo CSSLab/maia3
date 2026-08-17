@@ -209,7 +209,7 @@ maia3-uci --model maia3-5m --device cpu --no-use-amp
 By default, Maia3 only loads tensor state-dict checkpoints. If you need to load
 an old pickled checkpoint from a source you trust, add `--trust-checkpoint`.
 
-## Example via python-chess
+## Example via chess
 
 ```python
 import chess
