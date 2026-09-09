@@ -142,7 +142,11 @@ User-facing options:
 - `SelfElo`: set the side-to-move Elo.
 - `OppoElo`: set the opponent Elo.
 - `Temperature`: move sampling temperature. `0` means argmax.
-- `TopP`: nucleus sampling threshold. `1.0` disables top-p filtering.
+- `TopP`: nucleus sampling threshold. After temperature scaling, retain the
+  smallest set of highest-probability moves whose total probability reaches
+  the threshold (always retaining at least one move). `1.0` disables top-p
+  filtering; `Temperature=0` selects the highest-logit legal move regardless
+  of `TopP`.
 - `MultiPV`: number of likely human moves to show as UCI info lines.
 
 ## Use With Nibbler or Another Chess GUI

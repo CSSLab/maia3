@@ -172,8 +172,10 @@ def sample_from_logits(logits, temperature, top_p):
     if top_p < 1.0:
         sorted_probs, sorted_idx = torch.sort(probs, descending=True)
         cumulative = torch.cumsum(sorted_probs, dim=-1)
-        keep = cumulative <= top_p
-        keep[0] = True  # always keep top-1
+        # Keep a move while the mass before it is below the threshold, so
+        # the smallest prefix reaching top_p includes the crossing move.
+        keep = torch.ones_like(cumulative, dtype=torch.bool)
+        keep[1:] = cumulative[:-1] < top_p  # always keep top-1
         kept_probs = sorted_probs[keep]
         kept_idx = sorted_idx[keep]
         kept_probs = kept_probs / kept_probs.sum()
