@@ -235,6 +235,63 @@ import sys
 cmd = [sys.executable, "-m", "maia3.uci", "--model", "maia3-5m"]
 ```
 
+## Scoring Moves
+
+Maia3 can also report how likely it thinks a move is: the log-probability of a
+given move in a given position, for players of given Elos. This is useful for
+measuring how human-like moves are or for comparing players to the model.
+
+Score every move played in a PGN, writing one JSON line per move:
+
+```bash
+maia3-score --model maia3-5m --pgn games.pgn -o scores.jsonl
+```
+
+Each row has `game`, `ply`, `fen` (the position before the move), `move`,
+`played`, `self_elo`, `oppo_elo` and `logp`. Options:
+
+- `--moves all` scores every legal move at each ply, not only the played one.
+- `--format csv` writes CSV instead of JSON lines.
+- `--white-elo` / `--black-elo` override the PGN's `WhiteElo` / `BlackElo`
+  headers. Games without them fall back to `--elo` (default 1500), with a warning.
+- `--pgn` may be repeated; without it, PGN is read from stdin.
+
+Model options (`--model`, `--checkpoint-path`, `--device` and so on) are the
+same as `maia3-uci`'s.
+
+Two defaults differ from `maia3-uci`, so scores may not match what a GUI shows
+for the same position:
+
+- **History.** Scoring feeds the model the game's previous positions, as
+  `maia3-uci --use-uci-history` does. `maia3-uci` (and the preset executables)
+  repeat the current position instead; pass `--no-use-history` to match it.
+- **Precision.** Scoring runs in full fp32. On CUDA, `maia3-uci` uses mixed
+  precision by default, which is faster but changes log-probabilities slightly
+  (around the second or third decimal place). Pass `--use-amp` to match it, or
+  for faster bulk scoring. Neither setting matters on CPU, which is always fp32.
+
+From Python:
+
+```python
+import chess
+from maia3.scoring import Maia3Scorer
+
+scorer = Maia3Scorer.from_pretrained("maia3-5m", device="cpu")
+
+board = chess.Board()
+board.push_san("e4")  # push moves rather than using a FEN, so history is kept
+moves = [board.parse_san("e5"), board.parse_san("c5")]
+
+[logps] = scorer.log_probabilities(
+    [scorer.featurize_position(board, moves, self_elo=1500, oppo_elo=1500)]
+)
+```
+
+`Maia3Scorer(..., use_history=False, use_amp=True)` switches the same two
+settings. For whole games, `scorer.featurize_game(game, white_elo, black_elo)`
+featurizes every ply and is faster than scoring positions one by one.
+`log_probabilities` batches its inputs, so pass it many at once.
+
 ## Legacy Entry Point
 
 The old command still works from the repository root:

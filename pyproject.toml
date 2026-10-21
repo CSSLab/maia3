@@ -19,6 +19,9 @@ dependencies = [
   "torch",
 ]
 
+[project.optional-dependencies]
+test = ["pytest"]
+
 [project.urls]
 Homepage = "https://github.com/CSSLab/maia3"
 Models = "https://huggingface.co/collections/MaiaChess/maia3"
@@ -27,6 +30,7 @@ Paper = "https://arxiv.org/abs/2605.19091"
 [project.scripts]
 maia3-uci = "maia3.uci:main"
 maia3-cache = "maia3.cache:main"
+maia3-score = "maia3.scoring:main"
 maia3-3m-ablation = "maia3.presets:main_3m_ablation"
 maia3-5m = "maia3.presets:main_5m"
 maia3-23m = "maia3.presets:main_23m"
