@@ -65,7 +65,12 @@ def legal_moves_to_actions(board: chess.Board) -> List[Tuple[int, int, int, str,
         else:
             promo_idx = 0
 
-        vocab_idx = _ALL_MOVES_DICT.get(oriented_uci, -1)
+        vocab_idx = _ALL_MOVES_DICT.get(oriented_uci)
+        if vocab_idx is None:
+            raise ValueError(
+                f"legal move {move.uci()} cannot be represented in the canonical "
+                "4352-action vocabulary (verify board variant and orientation)"
+            )
         actions.append((from_sq, to_sq, promo_idx, oriented_uci, vocab_idx))
 
     return actions
