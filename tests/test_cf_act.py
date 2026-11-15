@@ -141,7 +141,7 @@ class TestCFAct(unittest.TestCase):
 
         boards = [
             chess.Board(),
-            chess.Board("8/8/8/8/8/8/4k3/4K2R w K - 0 1"),
+            chess.Board("4k3/8/8/8/8/8/8/4K2R w K - 0 1"),
         ]
         B = len(boards)
         tokens = torch.zeros(B, 64, 12 * self.cfg.history + 1)
