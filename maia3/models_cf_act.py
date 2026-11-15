@@ -178,6 +178,8 @@ class MAIA3ActModel(nn.Module):
         B_board, logits_value, logits_ponder = self.encode_board(tokens, self_elos, oppo_elos)
 
         if boards is not None:
+            if len(boards) != tokens.shape[0]:
+                raise ValueError("number of chess.Board objects must equal input batch size")
             batch_actions = [legal_moves_to_actions(b) for b in boards]
             collated = collate_legal_actions(batch_actions, device=tokens.device)
 
@@ -207,25 +209,61 @@ class MAIA3ActModel(nn.Module):
         self,
         checkpoint_path: str,
         device: torch.device = torch.device("cpu"),
-        strict: bool = False,
+        strict: bool = True,
+        trust_checkpoint: bool = False,
     ) -> Dict[str, Any]:
-        """Load pretrained Chessformer baseline checkpoint into encoder and value head.
+        """Initialize the unchanged backbone/value/ponder from CF-BASE weights.
 
-        Policy head parameters remain initialized for training or evaluation.
+        A strict load is mandatory for controlled research comparisons: it
+        rejects absent, unexpected, or shape-incompatible non-policy weights.
+        Original source/destination/promotion-head weights are intentionally
+        excluded, and the new action head retains its random initialization.
+        Set strict=False only for explicitly documented exploratory transfers.
+        Arbitrary pickle checkpoints require trust_checkpoint=True.
         """
-        ckpt = torch.load(checkpoint_path, map_location=device)
-        state_dict = ckpt["model_state_dict"] if isinstance(ckpt, dict) and "model_state_dict" in ckpt else ckpt
+        ckpt = torch.load(
+            checkpoint_path, map_location=device, weights_only=not trust_checkpoint
+        )
+        state_dict = (
+            ckpt["model_state_dict"]
+            if isinstance(ckpt, dict) and "model_state_dict" in ckpt else ckpt
+        )
+        if not isinstance(state_dict, dict):
+            raise TypeError("checkpoint must contain a state dictionary")
 
-        # Handle legacy "smolgen" naming
         renamed = {k.replace("smolgen", "gab"): v for k, v in state_dict.items()}
+        baseline_policy_keys = {
+            "proj_sq_from.weight", "proj_sq_to.weight", "promo_bias_proj.weight",
+        }
+        expected = {
+            k: v for k, v in self.state_dict().items()
+            if not k.startswith("policy_head.")
+        }
+        missing = sorted(set(expected) - set(renamed))
+        unexpected = sorted(set(renamed) - set(expected) - baseline_policy_keys)
+        incompatible = sorted(
+            k for k in set(expected) & set(renamed)
+            if not isinstance(renamed[k], torch.Tensor)
+            or renamed[k].shape != expected[k].shape
+        )
+        if strict and (missing or unexpected or incompatible):
+            raise RuntimeError(
+                "Baseline checkpoint parity failure: "
+                f"missing={missing[:10]}, unexpected={unexpected[:10]}, "
+                f"shape_mismatch={incompatible[:10]}"
+            )
 
-        # Filter out baseline policy head weights
-        baseline_policy_keys = {"proj_sq_from.weight", "proj_sq_to.weight", "promo_bias_proj.weight"}
-        encoder_value_dict = {k: v for k, v in renamed.items() if k not in baseline_policy_keys}
-
-        load_res = self.load_state_dict(encoder_value_dict, strict=False)
+        transferable = {
+            k: renamed[k] for k in expected.keys()
+            if k in renamed and k not in incompatible
+        }
+        self.load_state_dict(transferable, strict=False)
         return {
-            "loaded_keys": len(encoder_value_dict),
-            "missing_keys": load_res.missing_keys,
-            "unexpected_keys": load_res.unexpected_keys,
+            "loaded_keys": len(transferable),
+            "expected_keys": len(expected),
+            "missing_keys": missing,
+            "unexpected_keys": unexpected,
+            "shape_mismatch_keys": incompatible,
+            "excluded_policy_keys": sorted(baseline_policy_keys & set(renamed)),
+            "strict": strict,
         }
