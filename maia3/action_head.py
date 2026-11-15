@@ -173,13 +173,33 @@ class CFActPolicyHead(nn.Module):
 
         Args:
             logits_legal: (B, L_max) logits for legal actions.
-            vocab_indices: (B, L_max) vocabulary indices in [0, 4351] (-1 for invalid/padded).
+            vocab_indices: (B, L_max) vocabulary indices in [0, 4351] (-1 only for invalid/padded).
             action_mask: (B, L_max) bool mask.
             vocab_size: Total vocabulary size (default 4352).
 
         Returns:
             Tensor of shape (B, vocab_size) with logits for legal moves and -inf elsewhere.
         """
+        if logits_legal.ndim != 2:
+            raise ValueError("logits_legal must have shape (B, L_max)")
+        if action_mask.shape != logits_legal.shape or action_mask.dtype != torch.bool:
+            raise ValueError("action_mask must be boolean with shape (B, L_max)")
+        if vocab_indices.shape != logits_legal.shape or vocab_indices.dtype != torch.long:
+            raise ValueError("vocab_indices must be int64 with shape (B, L_max)")
+        if vocab_size < 1:
+            raise ValueError("vocab_size must be positive")
+        if any(x.device != logits_legal.device for x in (action_mask, vocab_indices)):
+            raise ValueError("logits, mask and vocabulary indices must share a device")
+
+        # The original 4352-vocabulary is a bijection on legal moves.
+        # Never silently discard a legal action or overwrite another action.
+        for row in range(logits_legal.shape[0]):
+            valid_indices = vocab_indices[row, action_mask[row]]
+            if ((valid_indices < 0) | (valid_indices >= vocab_size)).any().item():
+                raise ValueError(f"unmapped or out-of-range legal move in batch row {row}")
+            if valid_indices.unique().numel() != valid_indices.numel():
+                raise ValueError(f"duplicate legal vocabulary index in batch row {row}")
+
         B_size = logits_legal.shape[0]
         device = logits_legal.device
         full_logits = torch.full((B_size, vocab_size), float("-inf"), device=device, dtype=logits_legal.dtype)
@@ -189,8 +209,6 @@ class CFActPolicyHead(nn.Module):
             if valid.any():
                 v_idx = vocab_indices[b][valid]
                 l_val = logits_legal[b][valid]
-                # Filter any unexpected index bounds
-                mask_in_range = (v_idx >= 0) & (v_idx < vocab_size)
-                full_logits[b, v_idx[mask_in_range]] = l_val[mask_in_range]
+                full_logits[b, v_idx] = l_val
 
         return full_logits
