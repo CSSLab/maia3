@@ -335,7 +335,7 @@ class TestCFAct(unittest.TestCase):
         model = MAIA3ActModel(self.cfg)
         x = torch.zeros(2, 64, 12 * self.cfg.history + 1)
         elo = torch.tensor([1500, 1500])
-        with self.assertRaisesRegex(ValueError, "board objects must equal"):
+        with self.assertRaisesRegex(ValueError, "chess\\.Board objects must equal"):
             model(x, elo, elo, boards=[chess.Board()])
 
 
