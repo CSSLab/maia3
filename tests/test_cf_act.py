@@ -1,5 +1,7 @@
 import unittest
 import types
+import os
+import tempfile
 import chess
 import torch
 import torch.nn.functional as F
@@ -41,10 +43,11 @@ class TestCFAct(unittest.TestCase):
             # 6. En passant available for Black
             "rnbqkbnr/ppp1pppp/8/8/3pP3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 2",
             # 7. Pawn promotions (White on rank 7 with captures and pushes)
-            "4k3/4P3/8/8/8/8/8/4K3 w - - 0 1",
-            "3rk3/3P4/8/8/8/8/8/4K3 w - - 0 1",
-            # 8. Pawn promotions (Black on rank 2 with promotions)
-            "4k3/8/8/8/8/8/4p3/4K3 b - - 0 1",
+            "4k3/P7/8/8/8/8/8/4K3 w - - 0 1",
+            "r3k3/1P6/8/8/8/8/8/4K3 w - - 0 1",
+            # 8. Legal pawn promotions (black), including capture
+            "4k3/8/8/8/8/8/p7/4K3 b - - 0 1",
+            "4k3/8/8/8/8/8/1p6/R3K3 b - - 0 1",
         ]
 
         all_moves_dict = get_all_moves_dict()
@@ -71,6 +74,25 @@ class TestCFAct(unittest.TestCase):
                 if v_idx != -1:
                     self.assertIn(uci_str, all_moves_dict)
                     self.assertEqual(all_moves_dict[uci_str], v_idx)
+
+    def test_01b_promotions_are_legal_and_distinct(self):
+        """Verify both colors, all four types, and capture promotions are reached."""
+        cases = [
+            ("4k3/P7/8/8/8/8/8/4K3 w - - 0 1", "a7a8"),
+            ("r3k3/1P6/8/8/8/8/8/4K3 w - - 0 1", "b7a8"),
+            ("4k3/8/8/8/8/8/p7/4K3 b - - 0 1", "a7a8"),
+            ("4k3/8/8/8/8/8/1p6/R3K3 b - - 0 1", "b7a8"),
+        ]
+        for fen, oriented_prefix in cases:
+            board = chess.Board(fen)
+            self.assertTrue(board.is_valid(), fen)
+            actions = legal_moves_to_actions(board)
+            for suffix, promo_id in [("q", 1), ("r", 2), ("b", 3), ("n", 4)]:
+                matching = [a for a in actions if a[3] == oriented_prefix + suffix]
+                self.assertEqual(len(matching), 1, (fen, suffix))
+                self.assertEqual(matching[0][2], promo_id)
+                self.assertGreaterEqual(matching[0][4], 0)
+                self.assertEqual(matching[0][4], get_all_moves_dict()[matching[0][3]])
 
     def test_02_shape_integrity(self):
         """Verify tensor shapes at all stages across variable legal move counts."""
@@ -261,6 +283,60 @@ class TestCFAct(unittest.TestCase):
 
         self.assertTrue(torch.allclose(base_val, act_val, atol=1e-5))
         self.assertTrue(torch.allclose(base_ponder, act_ponder, atol=1e-5))
+
+    def test_07_scatter_rejects_invalid_and_colliding_indices(self):
+        logits = torch.tensor([[1.0, 2.0]])
+        mask = torch.tensor([[True, True]])
+        with self.assertRaisesRegex(ValueError, "unmapped or out-of-range"):
+            CFActPolicyHead.scatter_to_vocab_4352(logits, torch.tensor([[0, -1]]), mask)
+        with self.assertRaisesRegex(ValueError, "duplicate"):
+            CFActPolicyHead.scatter_to_vocab_4352(logits, torch.tensor([[3, 3]]), mask)
+        output = CFActPolicyHead.scatter_to_vocab_4352(logits, torch.tensor([[3, 9]]), mask)
+        self.assertEqual(output.shape, (1, 4352))
+        self.assertEqual(output[0, 3].item(), 1.0)
+        self.assertEqual(output[0, 9].item(), 2.0)
+        self.assertEqual(torch.isfinite(output).sum().item(), 2)
+
+    def test_08_strict_checkpoint_load_and_missing_weights(self):
+        original = MAIA3Model(self.cfg)
+        modified = MAIA3ActModel(self.cfg)
+        with tempfile.TemporaryDirectory() as directory:
+            good = os.path.join(directory, "good.pt")
+            bad = os.path.join(directory, "missing.pt")
+            torch.save({"model_state_dict": original.state_dict()}, good)
+            report = modified.load_baseline_checkpoint(good)
+            self.assertEqual(report["loaded_keys"], report["expected_keys"])
+            self.assertEqual(report["missing_keys"], [])
+            self.assertEqual(report["unexpected_keys"], [])
+            self.assertEqual(report["shape_mismatch_keys"], [])
+            self.assertTrue(torch.equal(modified.fc_value.weight, original.fc_value.weight))
+
+            incomplete = dict(original.state_dict())
+            del incomplete["fc_value.weight"]
+            torch.save({"model_state_dict": incomplete}, bad)
+            before = modified.fc_value.weight.detach().clone()
+            with self.assertRaisesRegex(RuntimeError, "checkpoint parity failure"):
+                modified.load_baseline_checkpoint(bad)
+            self.assertTrue(torch.equal(modified.fc_value.weight, before))
+            report = modified.load_baseline_checkpoint(bad, strict=False)
+            self.assertIn("fc_value.weight", report["missing_keys"])
+
+    def test_09_strict_checkpoint_rejects_wrong_shape(self):
+        original = MAIA3Model(self.cfg)
+        broken = dict(original.state_dict())
+        broken["fc_value.weight"] = broken["fc_value.weight"][:2].clone()
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "wrong_shape.pt")
+            torch.save(broken, path)
+            with self.assertRaisesRegex(RuntimeError, "shape_mismatch"):
+                MAIA3ActModel(self.cfg).load_baseline_checkpoint(path)
+
+    def test_10_forward_rejects_wrong_board_batch_length(self):
+        model = MAIA3ActModel(self.cfg)
+        x = torch.zeros(2, 64, 12 * self.cfg.history + 1)
+        elo = torch.tensor([1500, 1500])
+        with self.assertRaisesRegex(ValueError, "board objects must equal"):
+            model(x, elo, elo, boards=[chess.Board()])
 
 
 if __name__ == "__main__":
