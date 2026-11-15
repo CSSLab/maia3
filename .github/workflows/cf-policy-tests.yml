@@ -1,0 +1,32 @@
+name: CF policy regression tests
+
+on:
+  push:
+    branches: [CF-ACT, CF-CAH]
+  pull_request:
+    branches: [CF-ACT, CF-CAH]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install model and tests
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e . pytest
+      - name: CF-ACT regressions
+        run: python -m pytest tests/test_cf_act.py -q
+      - name: CF-CAH regressions (if present)
+        run: |
+          if [ -f tests/test_cf_cah.py ]; then
+            python -m pytest tests/test_cf_cah.py -q
+          fi
